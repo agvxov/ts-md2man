@@ -1,0 +1,13 @@
+.TH quote
+
+.di temp
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer nec odio.
+Praesent libero. Sed cursus ante dapibus diam. Sed nisi. Nulla quis sem at nibh elementum imperdiet.
+.br
+.di
+
+\L'\n[dn]u'
+
+.RS 2
+.temp
+.RE

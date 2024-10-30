@@ -1,0 +1,16 @@
+.TH MYCOMMAND 1 "October 28, 2024"
+
+.SH ATTRIBUTES
+For an explanation of the terms used in this section, see
+.BR attributes (7).
+.TS
+allbox;
+lbx lb lb.
+Interface	Attribute	Value   
+T{
+.na
+.nh
+.BR basename (),
+.BR dirname ()
+T}	Thread safety	MT-Safe
+.TE
