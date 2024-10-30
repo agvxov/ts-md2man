@@ -1,0 +1,395 @@
+%top{
+    #include <stdio.h>
+    #include <pcre.h>
+    #include "sds.h"
+
+    FILE * out_handle;
+    #define ECHO(s)            fputs(s, out_handle);
+    #define ECHO_FMT(fmt, ...) fprintf(out_handle, fmt, __VA_ARGS__);
+    #define NL                 fputs("\n", out_handle);
+
+    #define ORDERED_LIST_MAX_DEPT   4
+    #define ORDERED_LIST_MAX_DIGITS 4
+    int list_item_accumilators[ORDERED_LIST_MAX_DEPT];
+    int list_dept_indicator = -1;
+
+    static sds inline_replace(const char * const text, const char * const regex, const char * const replacement);
+    static sds inline_replace2(const char * const text, const char * const regex, const char * const replacement);
+
+    /* Since we can't just use tbsp normally to handle inline constructs:
+        > To use the two grammars, first parse the document with the block grammar.
+        > Then perform a second parse with the inline grammar
+        > using ts_parser_set_included_ranges to specify which parts are inline content.
+        > These parts are marked as inline nodes.
+        > Children of those inline nodes should be excluded from these ranges.
+        > For an example implementation see lib.rs in the bindings folder.
+       Using regex is significantly easier and won't negatively affect
+        the output document or its structure.
+    */
+    static
+    char * md_inline_to_groff(const char * const input) {
+        const char * quote       = "^>";
+        const char * bold_a      = "\\*\\*(.*?)\\*\\*";
+        const char * bold_u      = "__(.*?)__";
+        const char * italics_a   = "\\*(.*?)\\*";
+        const char * italics_u   = "_(.*?)_";
+        const char * code        = "`(.*?)`";
+        const char * inlink      = "\\[(.*?)\\]\\(#(.*?)\\)";
+        const char * outlink     = "\\[(.*?)\\]\\((.*?)\\)";
+
+        sds r = sdsnew(input);
+
+        r = inline_replace(r, quote,     "");
+        r = inline_replace(r, bold_a,    "\\fB%.*s\\fP");
+        r = inline_replace(r, bold_u,    "\\fB%.*s\\fP");
+        r = inline_replace(r, italics_a, "\\fI%.*s\\fP");
+        r = inline_replace(r, italics_u, "\\fI%.*s\\fP");
+        r = inline_replace(r, code,      "\\fB%.*s\\fP");
+
+        r = inline_replace2(r, inlink,  "%.*s");
+        r = inline_replace2(r, outlink, ".UR %.*s\n%.*s\n.UE ");
+
+        return r;
+    }
+
+    static
+    sds inline_replace(const char * const text, const char * const regex, const char * const replacement) {
+        const char * error_msg;
+        int error_offset;
+        int ovector[30];
+
+        pcre * re = pcre_compile(regex, PCRE_MULTILINE, &error_msg, &error_offset, NULL);
+
+        sds r = sdsnew("");
+        const char * current = text;
+
+        while (pcre_exec(re, NULL, current, strlen(current), 0, 0, ovector, 30) >= 0) {
+            r = sdscatlen(r, current, ovector[0]);
+
+            r = sdscatprintf(r, replacement,
+                             ovector[3] - ovector[2],
+                             current + ovector[2]
+            );
+
+            current += ovector[1];
+        }
+
+        r = sdscat(r, current);
+
+        pcre_free(re);
+        return r;
+    }
+
+    static
+    sds inline_replace2(const char * const text, const char * const regex, const char * const replacement) {
+        const char * error_msg;
+        int error_offset;
+        int ovector[30];
+
+        pcre * re = pcre_compile(regex, PCRE_DOTALL, &error_msg, &error_offset, NULL);
+
+        sds r = sdsnew("");
+        const char *current = text;
+
+        while (pcre_exec(re, NULL, current, strlen(current), 0, 0, ovector, 30) >= 0) {
+            r = sdscatlen(r, current, ovector[0]);
+
+            if (ovector[0]
+            && r[sdslen(r)-1] != '\n') {
+                r = sdscat(r, "\n");
+            }
+
+            r = sdscatprintf(r, replacement,
+                             ovector[5] - ovector[4],
+                             current + ovector[4],
+                             ovector[3] - ovector[2],
+                             current + ovector[2]
+            );
+
+            if (current[ovector[5]+1] == ' '
+            ||  current[ovector[5]+1] == '.'
+            ||  current[ovector[5]+1] == ','
+            ||  current[ovector[5]+1] == '!'
+            ||  current[ovector[5]+1] == '?') {
+                r = sdscatprintf(r, "%c", current[ovector[5]+1]);
+            } else {
+                r = sdscatprintf(r, "\n%c", current[ovector[5]+1]);
+            }
+
+            current += ovector[1] + 1;
+        }
+
+        r = sdscat(r, current);
+
+        pcre_free(re);
+        return r;
+    }
+}
+%language markdown
+%%
+
+// --- Text of any kind
+enter inline {
+    char * t = tbget_text;
+    sds rt = md_inline_to_groff(t);
+
+    ECHO(rt);
+    NL;
+
+    sdsfree(rt);
+    free(t);
+}
+
+// --- Headings
+
+enter atx_h1_marker {
+    ECHO(".TH ");
+}
+
+enter atx_h2_marker {
+    ECHO(".SH");
+    NL;
+}
+
+enter atx_h3_marker {
+    ECHO(".SS");
+    NL;
+}
+
+// --- Quotes ---
+enter block_quote {
+    ECHO(".RI");
+    NL;
+    ECHO(".IP");
+    NL;
+    ECHO("\\fI");
+    NL;
+}
+
+leave block_quote {
+    ECHO("\\fP");
+    NL;
+    ECHO(".RE");
+    NL;
+}
+
+// --- Lists ---
+enter list {
+    ++list_dept_indicator;
+    list_item_accumilators[list_dept_indicator] = 1;
+
+    if (list_dept_indicator) {
+        ECHO_FMT(".RS %d", list_dept_indicator * 4);
+        NL;
+        ECHO(".TP");
+        NL;
+    }
+}
+
+leave list {
+    ECHO(".RE");
+    NL; NL;
+
+    list_item_accumilators[list_dept_indicator] = 1;
+    --list_dept_indicator;
+}
+
+enter list_marker_star {
+    ECHO(".IP \\[bu] 2");
+    NL;
+}
+
+enter list_marker_plus {
+    ECHO(".IP \\+ 2");
+    NL;
+}
+
+enter list_marker_minus {
+    ECHO(".IP \\- 2");
+    NL;
+}
+
+enter list_marker_dot {
+    char buf[ORDERED_LIST_MAX_DIGITS];
+    sprintf(buf, "%d", list_item_accumilators[list_dept_indicator]);
+
+    ECHO_FMT(".IP \"%d.\" %d",
+                list_item_accumilators[list_dept_indicator],
+                (int)(strlen(buf)+2)
+    );
+    NL;
+
+    ++list_item_accumilators[list_dept_indicator];
+}
+
+// --- Horizontal Line ---
+enter thematic_break {
+    NL;
+    ECHO("\\l'4c'");
+    NL;
+}
+
+
+// --- Code ---
+enter fenced_code_block {
+    ECHO(".EX");
+    NL;
+    ECHO("\\fB");
+    NL;
+}
+
+enter code_fence_content {
+    char * t = tbget_text;
+
+    ECHO(t);
+    NL;
+
+    free(t);
+}
+
+leave fenced_code_block {
+    ECHO("\\fP");
+    NL;
+    ECHO(".EE");
+    NL;
+}
+
+enter indented_code_block {
+    char * t = tbget_text;
+
+    ECHO(".EX");
+    NL;
+    ECHO("\\fB");
+    NL;
+    ECHO(t);
+    ECHO("\\fP");
+    NL;
+    ECHO(".EE");
+    NL;
+
+    free(t);
+}
+
+
+// --- Tables ---
+enter pipe_table {
+    ECHO(".TS");
+    NL;
+    ECHO("allbox;");
+    NL;
+}
+
+enter pipe_table_header {
+    int child_count = ts_node_named_child_count($$);
+    for (int i = 0; i < child_count; i++) {
+        ECHO("l ");
+    }
+    ECHO(".");
+    NL;
+}
+
+leave pipe_table {
+    ECHO(".TE");
+    NL;
+}
+
+leave pipe_table_row {
+    NL;
+}
+
+enter pipe_table_cell {
+    char * t = tbget_text;
+
+    ECHO(t);
+    ECHO("\t");
+
+    free(t);
+}
+
+// --- Todo ---
+enter task_list_marker_checked {
+    ECHO("\\fB[X]\\fP ");
+}
+
+enter task_list_marker_unchecked {
+    ECHO("\\fB[ ]\\fP ");
+}
+
+%%
+
+static
+void usage(void) {
+    puts(
+        "ts-md2man [options] <input-file>\n"
+        "  -h        : print help and exit\n"
+        "  -o <file> : specify output file"
+    );
+}
+
+/* XXX: an input file could very well be larger than the stack limit
+*/
+#define READ_ENTIRE_FILE(filehandle, buffername) \
+	fseek(filehandle, 0, SEEK_END); \
+	int filehandle ## len = ftell(filehandle); \
+	rewind(filehandle); \
+	char buffername[filehandle ## len+1]; \
+	buffername[filehandle ## len] = '\00'; \
+	fread(buffername, filehandle ## len, sizeof(char), filehandle); \
+    fclose(filehandle);
+
+signed main(int argc, char * argv[]) {
+    // Init
+    const char * out_file = NULL;
+    const char * in_file = NULL;
+
+    if (argc < 2) {
+      usage_error:
+        usage();
+        return 1;
+    }
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-h")
+        ||  !strcmp(argv[i], "--help")) {
+            usage();
+            return 0;
+        } else
+        if (!strcmp(argv[i], "-o")) {
+            if (i != argc-1) {
+                ++i;
+                out_file = argv[i];
+            } else {
+                goto usage_error;
+            }
+        } else {
+            in_file = argv[i];
+        }
+    }
+
+    if (!in_file) {
+        goto usage_error;
+    }
+
+    if (out_file) {
+        out_handle = fopen(out_file, "w");
+        if (!out_handle) {
+            fputs("Failed to open output file.\n", stderr);
+            return 1;
+        }
+    } else {
+        out_handle = stdout;
+    }
+
+	FILE* in_handle = fopen(in_file, "r");
+	if(!in_handle){
+        fputs("Failed to open input file.\n", stderr);
+        return 1;
+    }
+
+    READ_ENTIRE_FILE(in_handle, in_str);
+
+    // IoC
+    tbtraverse(in_str);
+
+    return 0;
+}

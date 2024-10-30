@@ -1,0 +1,5 @@
+.gdb_history
+object/
+ts-md2man
+# generated from make:test
+max.groff
