@@ -225,7 +225,9 @@ enter list_marker_dot {
 // --- Horizontal Line ---
 enter thematic_break {
     NL;
-    ECHO("\\l'4c'");
+    ECHO(".ti 0");
+    NL;
+    ECHO("\\l'\\n(.lu'");
     NL;
 }
 
