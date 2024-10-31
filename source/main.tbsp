@@ -228,7 +228,7 @@ enter thematic_break {
     ECHO(".ti 0");
     NL;
     ECHO("\\l'\\n(.lu'");
-    NL;
+    NL; NL;
 }
 
 
