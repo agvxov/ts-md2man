@@ -134,7 +134,7 @@ enter inline {
     sds rt = md_inline_to_groff(t);
 
     ECHO(rt);
-    NL;
+    NL; NL;
 
     sdsfree(rt);
     free(t);
