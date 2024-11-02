@@ -7,7 +7,7 @@
 * lib pcre
 * lib tree-sitter & tree-sitter-markdown
 
-## Support
+## Supports
 * italics/bold/code
 * code blocks
 * star/plus/minus/ordered lists with nesting
@@ -16,6 +16,10 @@
 * horizontal line
 * quotes
 * tables
+
+## Demo
+![demo](documentation/demo.png)
+The input is [test/max.md](test/max.md).
 
 ## Notes
 Level 1 headings are translated to `.TH`-s.
